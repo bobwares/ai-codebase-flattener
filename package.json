@@ -1,0 +1,15 @@
+{
+  "name": "ai-codebase-flattener",
+  "version": "0.1.1",
+  "description": "Flatten a codebase into a single Markdown (or XML) artifact for AI analysis and multi-file fixes.",
+  "type": "module",
+  "bin": {
+    "ai-codebase-flattener": "./bin/cli.js"
+  },
+  "engines": { "node": ">=20.0.0" },
+  "license": "MIT",
+  "author": "gpt-5-codex",
+  "scripts": {
+    "smoke": "node bin/cli.js --root . --format md --out ./turns/0001/artifacts/codebase.md --include \"src/**,package.json\" --exclude \".git/**,node_modules/**\" && node -e \"console.log('OK')\""
+  }
+}

@@ -1,0 +1,91 @@
+# TASK 01 - Scaffold Project
+
+## Goal
+Create the ai-codebase-flattener Node.js project skeleton with config and ignore files.
+
+## Output (authoritative)
+- package.json
+- .gitignore
+- config/flattener.config.json
+- bin/cli.js (empty placeholder, filled in Task 02)
+- src/ (directory)
+
+## Preconditions
+- Node.js 20 available
+- npm available
+
+## Steps
+1. Make directories:
+   - mkdir -p bin src config
+2. Write file: package.json
+   """
+   {
+     "name": "ai-codebase-flattener",
+     "version": "0.1.1",
+     "description": "Flatten a codebase into a single Markdown (or XML) artifact for AI analysis and multi-file fixes.",
+     "type": "module",
+     "bin": {
+       "ai-codebase-flattener": "./bin/cli.js"
+     },
+     "engines": { "node": ">=20.0.0" },
+     "license": "MIT",
+     "author": "gpt-5-codex",
+     "scripts": {
+       "smoke": "node bin/cli.js --root . --format md --out ./turns/0001/artifacts/codebase.md --include \"src/**,package.json\" --exclude \".git/**,node_modules/**\" && node -e \"console.log('OK')\""
+     },
+     "dependencies": {
+       "picomatch": "^4.0.2"
+     }
+   }
+   """
+3. Write file: .gitignore
+   """
+   node_modules/
+   turns/
+   dist/
+   .DS_Store
+   """
+4. Write file: config/flattener.config.json
+   """
+   {
+     "root": ".",
+     "out": "turns/0001/artifacts/codebase.md",
+     "format": "md",
+     "includes": [
+       "src/**",
+       "public/**",
+       "package.json",
+       "pnpm-lock.yaml",
+       "yarn.lock",
+       "pom.xml",
+       "build.gradle",
+       "settings.gradle",
+       "Dockerfile",
+       "compose.yml",
+       "application.yml",
+       "application.properties"
+     ],
+     "excludes": [
+       ".git/**",
+       "node_modules/**",
+       "dist/**",
+       "build/**",
+       "target/**",
+       ".idea/**",
+       ".vscode/**",
+       ".venv/**",
+       "coverage/**",
+       "**/*.min.js"
+     ],
+     "max_file_bytes": 200000,
+     "chunk_bytes": 50000,
+     "follow_symlinks": false,
+     "honor_gitignore": true
+   }
+   """
+5. Write file: bin/cli.js
+   """
+   #!/usr/bin/env node
+   // placeholder; filled in TASK 02
+   console.log('ai-codebase-flattener CLI placeholder');
+   """

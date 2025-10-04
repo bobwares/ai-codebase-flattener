@@ -1,0 +1,20 @@
+# TASK 05 - Flatten Current Repo (XML)
+
+## Goal
+Create a single XML artifact for the active repo for machine-focused workflows.
+
+## Output (authoritative)
+- ${artifact_root}/${TURN_ID}/artifacts/codebase.xml
+
+## Preconditions
+- TASK 03 succeeded
+- project_context available
+
+## Steps
+1. mkdir -p ${artifact_root}/${TURN_ID}/artifacts
+2. node bin/cli.js \
+   --config config/flattener.config.json \
+   --root . \
+   --format xml \
+   --out ${artifact_root}/${TURN_ID}/artifacts/codebase.xml
+3. Record artifact path in the turn manifest if present.
