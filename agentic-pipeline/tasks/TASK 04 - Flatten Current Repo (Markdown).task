@@ -1,0 +1,23 @@
+# TASK 04 - Flatten Current Repo (Markdown)
+
+## Goal
+Create a single Markdown artifact for the active repo using project_context settings.
+
+## Output (authoritative)
+- ${artifact_root}/${TURN_ID}/artifacts/codebase.md
+
+## Preconditions
+- TASK 03 succeeded at least once (dependencies installed)
+- project_context available at ai/context/project_context.md
+
+## Steps
+1. Read ai/context/project_context.md for:
+   - include_globs, exclude_globs, preferred_format (expect "md")
+   - artifact_root and default_turn_artifacts_dir
+2. mkdir -p ${artifact_root}/${TURN_ID}/artifacts
+3. node bin/cli.js \
+   --config config/flattener.config.json \
+   --root . \
+   --format md \
+   --out ${artifact_root}/${TURN_ID}/artifacts/codebase.md
+4. Emit a short Change Log note: "Generated codebase.md for TURN_ID=${TURN_ID}".

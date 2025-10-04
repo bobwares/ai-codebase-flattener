@@ -1,0 +1,35 @@
+{
+  "root": ".",
+  "out": "turns/0001/artifacts/codebase.md",
+  "format": "md",
+  "includes": [
+    "src/**",
+    "public/**",
+    "package.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+    "pom.xml",
+    "build.gradle",
+    "settings.gradle",
+    "Dockerfile",
+    "compose.yml",
+    "application.yml",
+    "application.properties"
+  ],
+  "excludes": [
+    ".git/**",
+    "node_modules/**",
+    "dist/**",
+    "build/**",
+    "target/**",
+    ".idea/**",
+    ".vscode/**",
+    ".venv/**",
+    "coverage/**",
+    "**/*.min.js"
+  ],
+  "max_file_bytes": 200000,
+  "chunk_bytes": 50000,
+  "follow_symlinks": false,
+  "honor_gitignore": true
+}

@@ -1,0 +1,525 @@
+# TASK 02 - Write Sources
+
+## Goal
+Implement the CLI and core modules to emit Markdown or XML artifacts.
+
+## Output (authoritative)
+- bin/cli.js (final)
+- src/index.js
+- src/mdWriter.js
+- src/xmlWriter.js
+- src/git.js
+- src/glob.js
+- src/utils.js
+- README.md
+
+## Preconditions
+- TASK 01 completed
+
+## Steps
+1. Overwrite file: bin/cli.js
+   """
+   #!/usr/bin/env node
+   /**
+    * App: ai-codebase-flattener
+    * File: bin/cli.js
+    * Version: 0.1.1
+    * Author: gpt-5-codex
+    * Date: 2025-10-04T00:00:00Z
+    * Description: CLI entrypoint.
+    */
+   import { readFile } from "node:fs/promises";
+   import { resolve } from "node:path";
+   import { flatten } from "../src/index.js";
+
+   function parseArgs(argv) {
+     const args = { include: "", exclude: "", followSymlinks: false, honorGitignore: true };
+     for (let i = 2; i < argv.length; i++) {
+       const a = argv[i];
+       const next = argv[i + 1];
+       switch (a) {
+         case "--root": args.root = next; i++; break;
+         case "--out": args.out = next; i++; break;
+         case "--include": args.include = next; i++; break;
+         case "--exclude": args.exclude = next; i++; break;
+         case "--max-file-bytes": args.maxFileBytes = Number(next); i++; break;
+         case "--chunk-bytes": args.chunkBytes = Number(next); i++; break;
+         case "--follow-symlinks": args.followSymlinks = true; break;
+         case "--no-honor-gitignore": args.honorGitignore = false; break;
+         case "--format": args.format = next; i++; break;
+         case "--config": args.config = next; i++; break;
+         case "-h":
+         case "--help":
+           printHelp(); process.exit(0);
+         default:
+           if (a.startsWith("-")) { console.error(`Unknown flag: ${a}`); process.exit(2); }
+       }
+     }
+     return args;
+   }
+
+   function printHelp() {
+     console.log(`
+   ai-codebase-flattener
+
+   Usage:
+     ai-codebase-flattener --root <dir> --out <file> [options]
+
+   Options:
+     --include "<glob1,glob2,...>"   POSIX globs to include (relative to root)
+     --exclude "<glob1,glob2,...>"   POSIX globs to exclude
+     --max-file-bytes <n>            Max size to inline before chunking (default 200000)
+     --chunk-bytes <n>               Chunk size when chunking (default 50000)
+     --follow-symlinks               Follow symlinks on fallback walk
+     --no-honor-gitignore            Do not use 'git ls-files' even in a repo
+     --format md|xml                 Output format (default: xml if unspecified in config)
+     --config <path>                 Optional JSON config file
+     --help                          Show this help
+   `);
+   }
+
+   function parseCSV(s) {
+     return (s || "").split(",").map((x) => x.trim()).filter(Boolean);
+   }
+
+   async function main() {
+     const argv = parseArgs(process.argv);
+     let cfg = {};
+     if (argv.config) {
+       const p = resolve(argv.config);
+       try { cfg = JSON.parse(await readFile(p, "utf8")); }
+       catch (e) { console.error(`Warning: failed to parse config ${p}: ${e.message}`); }
+     }
+
+     const root = resolve(argv.root || cfg.root || ".");
+     const out = resolve(argv.out || cfg.out || "turns/0001/artifacts/codebase.xml");
+     const includes = argv.include ? parseCSV(argv.include) : (cfg.includes || []);
+     const excludes = argv.exclude ? parseCSV(argv.exclude) : (cfg.excludes || []);
+     const maxFileBytes = Number.isFinite(argv.maxFileBytes) ? argv.maxFileBytes : (cfg.max_file_bytes ?? 200000);
+     const chunkBytes = Number.isFinite(argv.chunkBytes) ? argv.chunkBytes : (cfg.chunk_bytes ?? 50000);
+     const followSymlinks = argv.followSymlinks || cfg.follow_symlinks || false;
+     const honorGitignore = argv.honorGitignore ?? (cfg.honor_gitignore ?? true);
+     const format = (argv.format || cfg.format || "xml").toLowerCase();
+
+     await flatten({
+       root,
+       out,
+       includes,
+       excludes,
+       maxFileBytes,
+       chunkBytes,
+       followSymlinks,
+       honorGitignore,
+       format
+     });
+
+     console.log(out);
+   }
+
+   main().catch((e) => { console.error(e?.stack || e?.message || String(e)); process.exit(1); });
+   """
+2. Write file: src/index.js
+   """
+   /**
+    * App: ai-codebase-flattener
+    * File: src/index.js
+    * Version: 0.1.1
+    * Description: Orchestrates selection + streamed artifact (XML or Markdown).
+    */
+   import { mkdir, readFile, stat } from "node:fs/promises";
+   import { createHash } from "node:crypto";
+   import { relative, resolve } from "node:path";
+   import { XmlWriter } from "./xmlWriter.js";
+   import { MdWriter } from "./mdWriter.js";
+   import { isGitRepo, gitBranchCommit, gitLsFiles } from "./git.js";
+   import { walkAllFiles, compileMatchers } from "./glob.js";
+   import { detectBinarySample, fileSha256, sampleBytes, toPosix } from "./utils.js";
+
+   export async function flatten(options) {
+     const {
+       root, out, includes = [], excludes = [],
+       maxFileBytes = 200000, chunkBytes = 50000,
+       followSymlinks = false, honorGitignore = true,
+       format = "xml"
+     } = options;
+
+     const rootAbs = resolve(root);
+     await mkdir(resolve(out, ".."), { recursive: true });
+
+     const writer = format === "md" ? new MdWriter(out) : new XmlWriter(out);
+     const [branch, commit] = await gitBranchCommit(rootAbs);
+
+     await writer.startCodebase({ root: rootAbs, includes, excludes, maxFileBytes, chunkBytes, branch, commit });
+
+     let candidates = [];
+     if (honorGitignore && (await isGitRepo(rootAbs))) {
+       candidates = (await gitLsFiles(rootAbs)).map((p) => resolve(rootAbs, p));
+     } else {
+       candidates = await walkAllFiles(rootAbs, { followSymlinks });
+     }
+
+     const { want } = compileMatchers(includes, excludes);
+     const selected = candidates.filter((p) => want(relative(rootAbs, p)));
+     selected.sort((a, b) => toPosix(relative(rootAbs, a)).localeCompare(toPosix(relative(rootAbs, b))));
+
+     const overall = createHash("sha256");
+
+     for (const absPath of selected) {
+       const rel = toPosix(relative(rootAbs, absPath));
+       try {
+         const st = await stat(absPath);
+         const size = st.size;
+         const sample = await sampleBytes(absPath, 4096);
+         const isBinary = detectBinarySample(sample);
+         const fileHash = await fileSha256(absPath);
+         overall.update(Buffer.from(fileHash, "hex"));
+
+         const lang = classifyLang(rel);
+         const encoding = isBinary ? "binary" : "utf-8";
+
+         await writer.writeFileHeader({ path: rel, lang, sizeBytes: size, sha256: fileHash, isBinary, encoding });
+
+         if (isBinary) {
+           if (size <= maxFileBytes) {
+             const data = await readFile(absPath);
+             await writer.writeBinaryBase64(data);
+           }
+           await writer.endFile();
+           continue;
+         }
+
+         if (size <= maxFileBytes) {
+           const text = await readFile(absPath, "utf8");
+           if (size <= chunkBytes || chunkBytes <= 0) {
+             await writer.writeTextContent(text);
+           } else {
+             const chunks = chunkUtf8(text, chunkBytes);
+             await writer.writeChunks(chunks);
+           }
+         } else {
+           const text = await readFile(absPath, "utf8").catch(async () => (await readFile(absPath)).toString("utf8"));
+           const chunks = chunkUtf8(text, Math.max(1, chunkBytes));
+           await writer.writeChunks(chunks);
+         }
+
+         await writer.endFile();
+       } catch (e) {
+         await writer.writeFileHeader({ path: rel, lang: "unknown", sizeBytes: 0, sha256: "", isBinary: false, encoding: "utf-8" });
+         await writer.writeError(e);
+         await writer.endFile();
+       }
+     }
+
+     await writer.endCodebase(overall.digest("hex"));
+     await writer.close();
+   }
+
+   function classifyLang(path) {
+     const lower = path.toLowerCase();
+     const map = new Map([
+       [".java", "java"], [".kt", "kotlin"], [".py", "python"], [".ts", "typescript"], [".tsx", "tsx"],
+       [".js", "javascript"], [".jsx", "jsx"], [".json", "json"], [".yml", "yaml"], [".yaml", "yaml"],
+       [".xml", "xml"], [".md", "markdown"], [".rb", "ruby"], [".go", "go"], [".c", "c"], [".h", "c-header"],
+       [".cpp", "cpp"], [".hpp", "cpp-header"], [".cs", "csharp"], [".php", "php"], [".html", "html"],
+       [".css", "css"], [".sql", "sql"], [".properties", "properties"], [".gradle", "gradle"]
+     ]);
+     for (const [ext, lang] of map) if (lower.endsWith(ext)) return lang;
+     return "unknown";
+   }
+
+   function chunkUtf8(text, size) {
+     const chunks = []; let i = 0, offset = 0;
+     while (offset < text.length) {
+       const slice = text.slice(offset, offset + size);
+       chunks.push({ index: i++, offset, text: slice });
+       offset += size;
+     }
+     return chunks;
+   }
+   """
+3. Write file: src/mdWriter.js
+   """
+   /**
+    * App: ai-codebase-flattener
+    * File: src/mdWriter.js
+    * Version: 0.1.1
+    * Description: Streamed Markdown writer that emits one combined .md artifact.
+    */
+   import { open } from "node:fs/promises";
+   import { createHash } from "node:crypto";
+
+   export class MdWriter {
+     constructor(outPath) { this.outPath = outPath; this.handle = null; this.files = []; this._overall = createHash("sha256"); }
+     async _w(s) { await this.handle.write(s); }
+
+     async startCodebase({ root, includes, excludes, maxFileBytes, chunkBytes, branch, commit }) {
+       this.handle = await open(this.outPath, "w");
+       const now = new Date().toISOString();
+       await this._w(`# Codebase Snapshot (Markdown)\n\n`);
+       await this._w(`- root: ${esc(root)}\n`);
+       await this._w(`- generated_at: ${esc(now)}\n`);
+       if (branch) await this._w(`- branch: ${esc(branch)}\n`);
+       if (commit) await this._w(`- commit: ${esc(commit)}\n`);
+       await this._w(`- version: 1.0\n\n`);
+       await this._w(`## Config\n\n`);
+       await this._w(`- includes: ${esc(includes.join(", "))}\n`);
+       await this._w(`- excludes: ${esc(excludes.join(", "))}\n`);
+       await this._w(`- max_file_bytes: ${maxFileBytes}\n`);
+       await this._w(`- chunk_bytes: ${chunkBytes}\n\n`);
+       await this._w(`---\n\n## Files\n\n`);
+     }
+
+     async writeFileHeader({ path, lang, sizeBytes, sha256, isBinary, encoding }) {
+       this.files.push(path);
+       this._overall.update(Buffer.from(sha256 || "", "hex"));
+       await this._w(`### ${esc(path)}\n\n`);
+       await this._w(`- lang: ${esc(lang)}\n- size_bytes: ${sizeBytes}\n- sha256: ${esc(sha256)}\n- binary: ${isBinary ? "true" : "false"}\n- encoding: ${esc(encoding)}\n\n`);
+     }
+
+     async writeTextContent(text) {
+       await this._w("```\n"); await this._w(text); await this._w(`\n```\n\n`);
+     }
+
+     async writeChunks(chunks) {
+       await this._w(`> This file is chunked for size. Combine chunks in order.\n\n`);
+       for (const c of chunks) {
+         await this._w(`#### chunk ${c.index} (offset ${c.offset})\n\n`);
+         await this._w("```\n"); await this._w(c.text); await this._w(`\n```\n\n`);
+       }
+     }
+
+     async writeBinaryBase64(buf) {
+       await this._w(`<details>\n<summary>binary content (base64, ${buf.length} bytes)</summary>\n\n`);
+       await this._w("```base64\n"); await this._w(buf.toString("base64")); await this._w(`\n```\n\n</details>\n\n`);
+     }
+
+     async writeError(e) { const msg = `${e?.name || "Error"}: ${e?.message || String(e)}`; await this._w(`> Error while reading file: ${esc(msg)}\n\n`); }
+     async endFile() { await this._w(`---\n\n`); }
+
+     async endCodebase(overallSha) {
+       await this._w(`## Digest\n\n- algo: sha256\n- value: ${esc(overallSha)}\n\n`);
+       await this._w(`## Index\n\n`);
+       for (const p of this.files) await this._w(`- ${linkTo('#' + anchor(p), p)}\n`);
+       await this._w(`\n`);
+     }
+
+     async close() { if (this.handle) await this.handle.close(); }
+   }
+
+   function esc(s) { return String(s ?? "").replaceAll("<", "&lt;").replaceAll(">", "&gt;"); }
+   function anchor(path) { return String(path).toLowerCase().replaceAll(/[^a-z0-9\s/_-]/g, "").replaceAll(/[\/\s]+/g, "-"); }
+   function linkTo(href, label) { return `[${label}](${href})`; }
+   """
+4. Write file: src/xmlWriter.js
+   """
+   /**
+    * App: ai-codebase-flattener
+    * File: src/xmlWriter.js
+    * Version: 0.1.1
+    * Description: Streaming XML writer with CDATA-safe output.
+    */
+   import { open } from "node:fs/promises";
+
+   export class XmlWriter {
+     constructor(outPath) { this.outPath = outPath; this.handle = null; }
+     async _w(s) { await this.handle.write(s); }
+
+     async startCodebase({ root, includes, excludes, maxFileBytes, chunkBytes, branch, commit }) {
+       this.handle = await open(this.outPath, "w");
+       await this._w('<?xml version="1.0" encoding="UTF-8"?>\n');
+       const attrs = [
+         ['version','1.0'], ['root',root], ['generated_at', new Date().toISOString()],
+         ...(branch ? [['branch', branch]] : []), ...(commit ? [['commit', commit]] : [])
+       ].map(([k,v]) => `${k}="${xmlAttr(v)}"`).join(" ");
+       await this._w(`<codebase ${attrs}>\n`);
+       await this._w("  <config>\n");
+       await this._w(`    <includes>${xmlTxt(includes.join(","))}</includes>\n`);
+       await this._w(`    <excludes>${xmlTxt(excludes.join(","))}</excludes>\n`);
+       await this._w(`    <max_file_bytes>${maxFileBytes}</max_file_bytes>\n`);
+       await this._w(`    <chunk_bytes>${chunkBytes}</chunk_bytes>\n`);
+       await this._w("  </config>\n");
+     }
+
+     async writeFileHeader({ path, lang, sizeBytes, sha256, isBinary, encoding }) {
+       const attrs = [
+         ["path", path], ["lang", lang], ["size_bytes", String(sizeBytes)],
+         ["sha256", sha256], ["is_binary", isBinary ? "true" : "false"], ["encoding", encoding]
+       ].map(([k,v]) => `${k}="${xmlAttr(v)}"`).join(" ");
+       await this._w(`  <file ${attrs}>\n`);
+     }
+
+     async writeTextContent(text) {
+       const parts = String(text).split("]]>");
+       if (parts.length === 1) { await this._w("    <content><![CDATA["); await this._w(parts[0]); await this._w("]]></content>\n"); return; }
+       await this._w("    <content>");
+       for (let i=0;i<parts.length;i++){ if(i>0) await this._w("]]]]><![CDATA[>"); await this._w("<![CDATA["); await this._w(parts[i]); await this._w("]]>"); }
+       await this._w("</content>\n");
+     }
+
+     async writeChunks(chunks) {
+       await this._w("    <chunks>\n");
+       for (const c of chunks) { await this._w(`      <chunk index="${c.index}" offset="${c.offset}"><![CDATA[`); await this._w(c.text); await this._w("]]></chunk>\n`); }
+       await this._w("    </chunks>\n");
+     }
+
+     async writeBinaryBase64(buf) { await this._w("    <content_base64>"); await this._w(buf.toString("base64")); await this._w("</content_base64>\n"); }
+     async writeError(e) { const msg = `${e?.name || "Error"}: ${e?.message || String(e)}`; await this._w(`    <error>${xmlTxt(msg)}</error>\n`); }
+     async endFile() { await this._w("  </file>\n"); }
+     async endCodebase(overall) { await this._w(`  <digest algo="sha256">${overall}</digest>\n</codebase>\n`); }
+     async close() { if (this.handle) await this.handle.close(); }
+   }
+
+   function xmlTxt(s){ return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;"); }
+   function xmlAttr(s){ return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll('"',"&quot;").replaceAll("'","&apos;"); }
+   """
+5. Write file: src/git.js
+   """
+   /**
+    * App: ai-codebase-flattener
+    * File: src/git.js
+    * Description: Minimal git helpers (optional).
+    */
+   import { access } from "node:fs/promises";
+   import { spawnSync } from "node:child_process";
+   import { resolve } from "node:path";
+
+   export async function isGitRepo(root) {
+     try { await access(resolve(root, ".git")); return true; } catch { return false; }
+   }
+   export async function gitBranchCommit(root) {
+     if (!(await isGitRepo(root))) return [null, null];
+     const branch = run(["rev-parse","--abbrev-ref","HEAD"], root);
+     const commit = run(["rev-parse","HEAD"], root);
+     return [branch || null, commit || null];
+   }
+   export async function gitLsFiles(root) {
+     const out = run(["ls-files","-z"], root); if (!out) return []; return out.split("\x00").filter(Boolean);
+   }
+   function run(args, cwd) {
+     const res = spawnSync("git", args, { cwd, encoding: "utf8" });
+     if (res.status !== 0) return null; return res.stdout.trim();
+   }
+   """
+6. Write file: src/glob.js
+   """
+   /**
+    * App: ai-codebase-flattener
+    * File: src/glob.js
+    * Description: Fallback tree walk + include/exclude using picomatch.
+    */
+   import { readdir, stat } from "node:fs/promises";
+   import { join, sep } from "node:path";
+   import picomatch from "picomatch";
+
+   export async function walkAllFiles(root, { followSymlinks = false } = {}) {
+     const out = [];
+     async function walk(dir) {
+       const entries = await readdir(dir, { withFileTypes: true });
+       for (const e of entries) {
+         const p = join(dir, e.name);
+         if (e.isDirectory()) { if (e.name === ".git") continue; await walk(p); }
+         else if (e.isFile()) out.push(p);
+         else if (e.isSymbolicLink() && followSymlinks) {
+           const st = await stat(p).catch(() => null);
+           if (st?.isFile()) out.push(p);
+           if (st?.isDirectory()) await walk(p);
+         }
+       }
+     }
+     await walk(root);
+     return out;
+   }
+
+   export function compileMatchers(includes = [], excludes = []) {
+     const includeMatchers = includes.length ? includes.map((g) => picomatch(g, { posixSlashes: true })) : [() => true];
+     const excludeMatchers = excludes.length ? excludes.map((g) => picomatch(g, { posixSlashes: true })) : [];
+     function want(relPath) {
+       const p = relPath.split(sep).join("/"); // POSIX
+       const inc = includeMatchers.some((m) => m(p));
+       const exc = excludeMatchers.some((m) => m(p));
+       return inc && !exc;
+     }
+     return { want };
+   }
+   """
+7. Write file: src/utils.js
+   """
+   /**
+    * App: ai-codebase-flattener
+    * File: src/utils.js
+    * Description: Common helpers.
+    */
+   import { createHash } from "node:crypto";
+   import { open } from "node:fs/promises";
+   import { sep } from "node:path";
+
+   export function toPosix(p) { return p.split(sep).join("/"); }
+
+   export async function fileSha256(path) {
+     const h = createHash("sha256");
+     const fh = await open(path, "r");
+     try {
+       const buf = Buffer.alloc(1024 * 1024);
+       let pos = 0;
+       while (true) {
+         const { bytesRead } = await fh.read({ buffer: buf, position: pos });
+         if (!bytesRead) break;
+         h.update(buf.subarray(0, bytesRead)); pos += bytesRead;
+       }
+     } finally { await fh.close(); }
+     return h.digest("hex");
+   }
+
+   export async function sampleBytes(path, size) {
+     const fh = await open(path, "r");
+     try {
+       const st = await fh.stat();
+       const n = Math.min(size, st.size);
+       const buf = Buffer.alloc(n);
+       await fh.read({ buffer: buf, position: 0, length: n });
+       return buf;
+     } finally { await fh.close(); }
+   }
+
+   export function detectBinarySample(sample) {
+     if (!sample || sample.length === 0) return false;
+     if (sample.includes(0)) return true;
+     const printable = new Set([7,8,9,10,12,13,27, ...Array.from({length:95},(_,i)=>32+i)]);
+     let nontext = 0; for (const b of sample) if (!printable.has(b)) nontext++;
+     return nontext / sample.length > 0.3;
+   }
+   """
+8. Write file: README.md
+   """
+   # ai-codebase-flattener
+
+   Flatten a repository (or folder) into a single Markdown or XML artifact for AI analysis and cross-file edits.
+
+   ## Install
+
+   npm install
+
+   ## CLI
+
+   ai-codebase-flattener \\
+     --root . \\
+     --out turns/0042/artifacts/codebase.md \\
+     --format md \\
+     --include "src/**,package.json" \\
+     --exclude ".git/**,node_modules/**"
+
+   Or with config:
+
+   ai-codebase-flattener --config config/flattener.config.json
+
+   ### Behavior
+   - If in a Git repo and honor_gitignore=true, candidates come from git ls-files.
+   - Otherwise, recursively walk and filter with globs.
+   - Text files in Markdown are fenced; in XML they are CDATA.
+   - Binaries are base64-encoded if size ≤ max_file_bytes.
+   - Oversized text is chunked to chunk_bytes.
+
+   ### Output
+   - Markdown: combined file with per-file sections and a digest footer.
+   - XML: <codebase> root, per-file <file>, and final <digest>.
+   """

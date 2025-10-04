@@ -1,0 +1,4 @@
+node_modules/
+turns/
+dist/
+.DS_Store

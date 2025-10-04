@@ -1,0 +1,23 @@
+# TASK 03 - Build & Smoke
+
+## Goal
+Install dependencies and verify the CLI by generating an artifact into the current turn folder.
+
+## Output (authoritative)
+- ${artifact_root}/${TURN_ID}/artifacts/codebase.md
+
+## Preconditions
+- TASK 02 completed
+- Node.js 20 and npm present
+- TURN_ID exported in the environment or supplied as variable
+
+## Steps
+1. npm install
+2. mkdir -p ${artifact_root}/${TURN_ID}/artifacts
+3. node bin/cli.js \
+   --root . \
+   --format md \
+   --out ${artifact_root}/${TURN_ID}/artifacts/codebase.md \
+   --include "src/**,package.json" \
+   --exclude ".git/**,node_modules/**"
+4. If the command fails, stop and output logs. Otherwise, record the artifact path in the turn manifest if available.
